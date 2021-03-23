@@ -21,7 +21,7 @@ class state:
 curState = state()
 
 while True:
-     # Get info from the Sensors
+    # Get info from the Sensors
     curState = state(x,y,theta,wr,wl,)
     
     # xy= update_xy()
@@ -40,7 +40,7 @@ while True:
     w = Robot.rad/Robot.L*(wr-wl); #% Rotational velocity
     
     #  Calculate dynamics
-    theta = x(obj.th_ind);  #% Orientation
+    theta = curState.theta;  #% Orientation
     # xdot = zeros(obj.dimensions,1);
     x= v * cos(theta);  #\dot{x}
     y = v * sin(theta);  #\dot{y}

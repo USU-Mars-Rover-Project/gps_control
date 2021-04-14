@@ -34,7 +34,6 @@
 #define LEFTDRIVE 11
 #define RIGHTDRIVE 10
 #define GPSSerial Serial1
-#define GPSECHO false
 
 float leftThrottle = 0;   // 1000 to 2000, 1500 is stopped, 0 is disarmed
 float rightThrottle = 0;  // 1000 to 2000, 1500 is stopped, 0 is disarmed
@@ -42,14 +41,24 @@ float rest = 1500;        // resting PWM
 float maxCCW = 1700;      // clockwise PWM
 float maxCW = 1300;       // counter clockwise PWM
 
-//float magCal = 0;         // calibration offset for calibrating magX
-//float mag = 0;
+float magX_min = -19.00;  // Obtain this value from calibration sketch
+float magY_min = -31.09;  // Obtain this value from calibration sketch
+float magZ_min = -1;  // Obtain this value from calibration sketch
+float magX_max = 68.82;   // Obtain this value from calibration sketch
+float magY_max = 52.18;   // Obtain this value from calibration sketch
+float magZ_max = 1;   // Obtain this value from calibration sketch
+bool useCalibratedMag = true;
+float heading = 0;
+bool calibrating = false; // press button 1 to enter calibration mode, button 2 to exit.
+unsigned long blePrintMillis = 0;
 
 Servo left;
 Servo right;
 
 Adafruit_GPS GPS(&GPSSerial);
 Adafruit_LSM303DLH_Mag_Unified mag = Adafruit_LSM303DLH_Mag_Unified(12345);
+
+#define GPSECHO false
 
 /*=========================================================================
     APPLICATION SETTINGS
@@ -225,7 +234,7 @@ void loop(void)
     // a tricky thing here is if we print the NMEA sentence, or data
     // we end up not listening and catching other sentences!
     // so be very wary if using OUTPUT_ALLDATA and trying to print out data
-    Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
+    //Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
     if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
       return; // we can fail to parse a sentence in which case we should just wait for another
   }
@@ -234,147 +243,236 @@ void loop(void)
   mag.getEvent(&event);
   float pi = 3.14159;
   // Calculate the angle of the vector y,x
-  float heading = (atan2(event.magnetic.y, event.magnetic.x) * 180) / pi;
+  if(useCalibratedMag){
+    float mag_x = mapf(event.magnetic.x, magX_min,magX_max, -100,100);
+    float mag_y = mapf(event.magnetic.y, magY_min,magY_max, -100,100);
+    heading = (atan2(mag_y, mag_x) * 180) / pi;
+  }
+  else{
+    heading = (atan2(event.magnetic.y, event.magnetic.x) * 180) / pi;
+  }
   // Normalize to 0-360
   if (heading < 0) {
     heading = 360 + heading;
   }
-  
-  //if(GPS.fix){
-    ble.print(heading);
-    ble.print(" ");
-    ble.print(GPS.satellites);
-    ble.print(" ");
-    ble.print(GPS.latitude,10);
-    ble.print(" ");
-    ble.print(GPS.lat);
-    ble.print(" ");
-    ble.print(GPS.longitude,10);
-    ble.print(" ");
-    ble.println(GPS.lon);
-  //}
-  
-  
-  /* Wait for new data to arrive */
-  uint8_t len = readPacket(&ble, BLE_READPACKET_TIMEOUT);
-  if (len == 0) return;
 
-  /* Got a packet! */
-  // printHex(packetbuffer, len);
-
-  // Color
-  if (packetbuffer[1] == 'C') {
-    uint8_t red = packetbuffer[2];
-    uint8_t green = packetbuffer[3];
-    uint8_t blue = packetbuffer[4];
-    Serial.print ("RGB #");
-    if (red < 0x10) Serial.print("0");
-    Serial.print(red, HEX);
-    if (green < 0x10) Serial.print("0");
-    Serial.print(green, HEX);
-    if (blue < 0x10) Serial.print("0");
-    Serial.println(blue, HEX);
-  }
-
-  // Buttons
-  if (packetbuffer[1] == 'B') {
-    uint8_t buttnum = packetbuffer[2] - '0';
-    boolean pressed = packetbuffer[3] - '0';
-    Serial.print ("Button "); Serial.print(buttnum);
-    if (pressed) {
-      Serial.println(" pressed");
-      // 5=forward, 6=back, 7=leftTurn, 8=rightTurn
-      // leftPWM=10 rightPWM=11
-      if(buttnum==5){ // All forward
-        left.writeMicroseconds(maxCCW);
-        right.writeMicroseconds(maxCW);
-      }
-      if(buttnum==6){ // All backward
-        left.writeMicroseconds(maxCW);
-        right.writeMicroseconds(maxCCW);
-      }
-      if(buttnum==7){ // right forward, left backward
-        left.writeMicroseconds(maxCW);
-        right.writeMicroseconds(maxCW);
-      }
-      if(buttnum==8){ // right backward, left forward
-        left.writeMicroseconds(maxCCW);
-        right.writeMicroseconds(maxCCW);
-      }
-      if(buttnum==1){ // zero magnetometer one time
-        //magCal = mag;
-      }
-    } else {
-      Serial.println(" released");
-      // All stop
-      left.writeMicroseconds(rest);
-      right.writeMicroseconds(rest);
+  
+  if(!calibrating){
+    if(millis()-blePrintMillis > 1000){
+      blePrintMillis = millis();
+      ble.print(heading);
+      ble.print(" ");
+      ble.print(GPS.satellites);
+      ble.print(" ");
+      if(GPS.lat == 'S' && GPS.latitude>=0) GPS.latitude = -GPS.latitude;
+      ble.print(GPS.latitude/100.0,12);
+      ble.print(" ");
+      if(GPS.lon == 'W' && GPS.longitude>=0) GPS.longitude = -GPS.longitude;
+      ble.println(GPS.longitude/100.0,12);
     }
   }
-
-  // GPS Location
-  if (packetbuffer[1] == 'L') {
-    float lat, lon, alt;
-    lat = parsefloat(packetbuffer+2);
-    lon = parsefloat(packetbuffer+6);
-    alt = parsefloat(packetbuffer+10);
-    Serial.print("GPS Location\t");
-    Serial.print("Lat: "); Serial.print(lat, 4); // 4 digits of precision!
-    Serial.print('\t');
-    Serial.print("Lon: "); Serial.print(lon, 4); // 4 digits of precision!
-    Serial.print('\t');
-    Serial.print(alt, 4); Serial.println(" meters");
+  else{
+    // Find all minimum and maximum mag values:
+    if (event.magnetic.x < magX_min) magX_min = event.magnetic.x;
+    if (event.magnetic.x > magX_max) magX_max = event.magnetic.x;
+    if (event.magnetic.y < magY_min) magY_min = event.magnetic.y;
+    if (event.magnetic.y > magY_max) magY_max = event.magnetic.y;
+    if (event.magnetic.z < magZ_min) magZ_min = event.magnetic.z;
+    if (event.magnetic.z > magZ_max) magZ_max = event.magnetic.z;
+    // Print all minimum and maximum mag values:
+    ble.print("minXY: ");
+    ble.print(magX_min);
+    ble.print(" ");
+    ble.println(magY_min);
+    //ble.print(" ");
+    //ble.println(magZ_min);
+    ble.print("maxXY: ");
+    ble.print(magX_max);
+    ble.print(" ");
+    ble.println(magY_max);
+    ble.println(" ");
+    //ble.println(magZ_max);
   }
+  
+  
+  
+//  /* Wait for new data to arrive */
+//  uint8_t len = readPacket(&ble, BLE_READPACKET_TIMEOUT);
+//  if (len == 0) return;
+//
+//  /* Got a packet! */
+//  // printHex(packetbuffer, len);
+//
+//  // Color
+//  if (packetbuffer[1] == 'C') {
+//    uint8_t red = packetbuffer[2];
+//    uint8_t green = packetbuffer[3];
+//    uint8_t blue = packetbuffer[4];
+//    Serial.print ("RGB #");
+//    if (red < 0x10) Serial.print("0");
+//    Serial.print(red, HEX);
+//    if (green < 0x10) Serial.print("0");
+//    Serial.print(green, HEX);
+//    if (blue < 0x10) Serial.print("0");
+//    Serial.println(blue, HEX);
+//  }
+//
+//  // Buttons
+//  if (packetbuffer[1] == 'B') {
+//    uint8_t buttnum = packetbuffer[2] - '0';
+//    boolean pressed = packetbuffer[3] - '0';
+//    Serial.print ("Button "); Serial.print(buttnum);
+//    if (pressed) {
+//      Serial.println(" pressed");
+//      // 5=forward, 6=back, 7=leftTurn, 8=rightTurn
+//      // leftPWM=10 rightPWM=11
+//      if(buttnum==5){ // All forward
+//        left.writeMicroseconds(maxCCW);
+//        right.writeMicroseconds(maxCW);
+//      }
+//      if(buttnum==6){ // All backward
+//        left.writeMicroseconds(maxCW);
+//        right.writeMicroseconds(maxCCW);
+//      }
+//      if(buttnum==7){ // right forward, left backward
+//        left.writeMicroseconds(maxCW);
+//        right.writeMicroseconds(maxCW);
+//      }
+//      if(buttnum==8){ // right backward, left forward
+//        left.writeMicroseconds(maxCCW);
+//        right.writeMicroseconds(maxCCW);
+//      }
+//      if(buttnum==1){ // zero magnetometer one time
+//        calibrating = true;
+//        ble.println("CALIBRATING MAG");
+//      }
+//      if(buttnum==2){ // zero magnetometer one time
+//        calibrating = false;
+//        ble.println("DONE CALIBRATING");
+//      }
+//    } else {
+//      Serial.println(" released");
+//      // All stop
+//      left.writeMicroseconds(rest);
+//      right.writeMicroseconds(rest);
+//    }
+//  }
+//
+//  // GPS Location
+//  if (packetbuffer[1] == 'L') {
+//    float lat, lon, alt;
+//    lat = parsefloat(packetbuffer+2);
+//    lon = parsefloat(packetbuffer+6);
+//    alt = parsefloat(packetbuffer+10);
+//    Serial.print("GPS Location\t");
+//    Serial.print("Lat: "); Serial.print(lat, 4); // 4 digits of precision!
+//    Serial.print('\t');
+//    Serial.print("Lon: "); Serial.print(lon, 4); // 4 digits of precision!
+//    Serial.print('\t');
+//    Serial.print(alt, 4); Serial.println(" meters");
+//  }
+//
+//  // Accelerometer
+//  if (packetbuffer[1] == 'A') {
+//    float x, y, z;
+//    x = parsefloat(packetbuffer+2);
+//    y = parsefloat(packetbuffer+6);
+//    z = parsefloat(packetbuffer+10);
+//    Serial.print("Accel\t");
+//    Serial.print(x); Serial.print('\t');
+//    Serial.print(y); Serial.print('\t');
+//    Serial.print(z); Serial.println();
+//  }
+//
+//  // Magnetometer
+//  if (packetbuffer[1] == 'M') {
+//    float x, y, z;
+//    x = parsefloat(packetbuffer+2);
+//    y = parsefloat(packetbuffer+6);
+//    z = parsefloat(packetbuffer+10);
+////    mag = atan2(y,x)*180/3.1415926; //-magCal;   // Store into the global variable;
+//    Serial.print("Mag\t");
+//    //Serial.print(x); Serial.print('\t');
+//    //Serial.print(y); Serial.print('\t');
+//    //Serial.print(z); Serial.println();
+//    //Serial.println(mag);
+//  }
+//
+//  // Gyroscope
+//  if (packetbuffer[1] == 'G') {
+//    float x, y, z;
+//    x = parsefloat(packetbuffer+2);
+//    y = parsefloat(packetbuffer+6);
+//    z = parsefloat(packetbuffer+10);
+//    Serial.print("Gyro\t");
+//    Serial.print(x); Serial.print('\t');
+//    Serial.print(y); Serial.print('\t');
+//    Serial.print(z); Serial.println();
+//  }
+//
+//  // Quaternions
+//  if (packetbuffer[1] == 'Q') {
+//    float x, y, z, w;
+//    x = parsefloat(packetbuffer+2);
+//    y = parsefloat(packetbuffer+6);
+//    z = parsefloat(packetbuffer+10);
+//    w = parsefloat(packetbuffer+14);
+//    Serial.print("Quat\t");
+//    Serial.print(x); Serial.print('\t');
+//    Serial.print(y); Serial.print('\t');
+//    Serial.print(z); Serial.print('\t');
+//    Serial.print(w); Serial.println();
+//  }
+}
 
-  // Accelerometer
-  if (packetbuffer[1] == 'A') {
-    float x, y, z;
-    x = parsefloat(packetbuffer+2);
-    y = parsefloat(packetbuffer+6);
-    z = parsefloat(packetbuffer+10);
-    Serial.print("Accel\t");
-    Serial.print(x); Serial.print('\t');
-    Serial.print(y); Serial.print('\t');
-    Serial.print(z); Serial.println();
-  }
 
-  // Magnetometer
-  if (packetbuffer[1] == 'M') {
-    float x, y, z;
-    x = parsefloat(packetbuffer+2);
-    y = parsefloat(packetbuffer+6);
-    z = parsefloat(packetbuffer+10);
-//    mag = atan2(y,x)*180/3.1415926; //-magCal;   // Store into the global variable;
-    Serial.print("Mag\t");
-    //Serial.print(x); Serial.print('\t');
-    //Serial.print(y); Serial.print('\t');
-    //Serial.print(z); Serial.println();
-    //Serial.println(mag);
-  }
+double mapf(double x, double in_min, double in_max, double out_min, double out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 
-  // Gyroscope
-  if (packetbuffer[1] == 'G') {
-    float x, y, z;
-    x = parsefloat(packetbuffer+2);
-    y = parsefloat(packetbuffer+6);
-    z = parsefloat(packetbuffer+10);
-    Serial.print("Gyro\t");
-    Serial.print(x); Serial.print('\t');
-    Serial.print(y); Serial.print('\t');
-    Serial.print(z); Serial.println();
-  }
+float deg2rad(deg){
+  return deg*PI/180;
+}
 
-  // Quaternions
-  if (packetbuffer[1] == 'Q') {
-    float x, y, z, w;
-    x = parsefloat(packetbuffer+2);
-    y = parsefloat(packetbuffer+6);
-    z = parsefloat(packetbuffer+10);
-    w = parsefloat(packetbuffer+14);
-    Serial.print("Quat\t");
-    Serial.print(x); Serial.print('\t');
-    Serial.print(y); Serial.print('\t');
-    Serial.print(z); Serial.print('\t');
-    Serial.print(w); Serial.println();
-  }
+float distance(double lat1, double lon1, double lat2, double lon2){  // generally used geo measurement function
+    float R = 6378.137; // Radius of earth in KM
+    float dLat = lat2 * PI / 180 - lat1 * PI / 180;
+    float dLon = lon2 * PI / 180 - lon1 * PI / 180;
+    float a = sin(dLat/2) * sin(dLat/2) + cos(lat1 * PI / 180) * cos(lat2 * PI / 180) * sin(dLon/2) * sin(dLon/2);
+    float c = 2 * atan2(sqrt(a), sqrt(1-a));
+    float d = R * c;
+    return d * 1000; // meters
+}
+
+float getSteering(currHead, currLat, currLon, targLat, targLon){
+    // currHead must be from -360 to 360;
+    x = cos(deg2rad(targLat)) * sin(deg2rad(currLon-targLon));
+    y = cos(deg2rad(currLat)) * sin(deg2rad(targLat)) - sin(deg2rad(currLat)) * cos(deg2rad(targLat)) * cos(deg2rad(currLon-targLon));
+    steering = -rad2deg(atan2(x,y)) - currHead;
+    if(steering >= 180){
+        steering = steering - 360;
+    }
+    if(steering <= -180){
+        steering = steering + 360;
+    }
+    return steering;
+}
+
+float L_R_velocity = differentialDrive(float steeringAngle, float driveSpeed){
+    // steeringAngle must be from -180 to 180.
+    // maximum forward is 2000.
+    // stop is 1500.
+    // maximum reverse is 1000.
+    if steeringAngle < 0 
+        %R = driveSpeed + mapfun(abs(steeringAngle), 0,180, 0,100);
+        R = driveSpeed + interp1([0,180],[0,100],abs(steeringAngle));
+    else
+        R = driveSpeed;
+    end
+    if steeringAngle > 0
+        L = driveSpeed + interp1([0,180],[0,100],abs(steeringAngle));
+    else
+        L = driveSpeed;
+    end
+    L_R_velocity = [L, R];
 }

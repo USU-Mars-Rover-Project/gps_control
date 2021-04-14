@@ -35,11 +35,18 @@
 #define RIGHTDRIVE 10
 #define GPSSerial Serial1
 
+double targetLat = 41.741915714505566;
+double targetLon = -111.80837907922745;
+
+float steeringAngle = 0;
+float distFromTarget = 0;
+
 float leftThrottle = 0;   // 1000 to 2000, 1500 is stopped, 0 is disarmed
 float rightThrottle = 0;  // 1000 to 2000, 1500 is stopped, 0 is disarmed
 float rest = 1500;        // resting PWM
-float maxCCW = 1700;      // clockwise PWM
-float maxCW = 1300;       // counter clockwise PWM
+float driveSpeed = 200;
+float maxCCW = rest+driveSpeed;      // clockwise PWM
+float maxCW = rest-driveSpeed;       // counter clockwise PWM
 
 float magX_min = -19.00;  // Obtain this value from calibration sketch
 float magY_min = -31.09;  // Obtain this value from calibration sketch
@@ -51,6 +58,8 @@ bool useCalibratedMag = true;
 float heading = 0;
 bool calibrating = false; // press button 1 to enter calibration mode, button 2 to exit.
 unsigned long blePrintMillis = 0;
+unsigned long buttonMillis = 0;
+bool autonomous = false;
 
 Servo left;
 Servo right;
@@ -234,9 +243,11 @@ void loop(void)
     // a tricky thing here is if we print the NMEA sentence, or data
     // we end up not listening and catching other sentences!
     // so be very wary if using OUTPUT_ALLDATA and trying to print out data
-    //Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
+    Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
     if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
       return; // we can fail to parse a sentence in which case we should just wait for another
+    if(GPS.lat == 'S' && GPS.latitude>=0) GPS.latitude = -GPS.latitude;
+    if(GPS.lon == 'W' && GPS.longitude>=0) GPS.longitude = -GPS.longitude;
   }
 
   sensors_event_t event;
@@ -262,12 +273,14 @@ void loop(void)
       blePrintMillis = millis();
       ble.print(heading);
       ble.print(" ");
+      ble.print(steeringAngle);
+      ble.print(" ");
+      ble.print(distFromTarget);
+      ble.print(" ");
       ble.print(GPS.satellites);
       ble.print(" ");
-      if(GPS.lat == 'S' && GPS.latitude>=0) GPS.latitude = -GPS.latitude;
       ble.print(GPS.latitude/100.0,12);
       ble.print(" ");
-      if(GPS.lon == 'W' && GPS.longitude>=0) GPS.longitude = -GPS.longitude;
       ble.println(GPS.longitude/100.0,12);
     }
   }
@@ -295,134 +308,166 @@ void loop(void)
   }
   
   
-  
-//  /* Wait for new data to arrive */
-//  uint8_t len = readPacket(&ble, BLE_READPACKET_TIMEOUT);
-//  if (len == 0) return;
-//
-//  /* Got a packet! */
-//  // printHex(packetbuffer, len);
-//
-//  // Color
-//  if (packetbuffer[1] == 'C') {
-//    uint8_t red = packetbuffer[2];
-//    uint8_t green = packetbuffer[3];
-//    uint8_t blue = packetbuffer[4];
-//    Serial.print ("RGB #");
-//    if (red < 0x10) Serial.print("0");
-//    Serial.print(red, HEX);
-//    if (green < 0x10) Serial.print("0");
-//    Serial.print(green, HEX);
-//    if (blue < 0x10) Serial.print("0");
-//    Serial.println(blue, HEX);
-//  }
-//
-//  // Buttons
-//  if (packetbuffer[1] == 'B') {
-//    uint8_t buttnum = packetbuffer[2] - '0';
-//    boolean pressed = packetbuffer[3] - '0';
-//    Serial.print ("Button "); Serial.print(buttnum);
-//    if (pressed) {
-//      Serial.println(" pressed");
-//      // 5=forward, 6=back, 7=leftTurn, 8=rightTurn
-//      // leftPWM=10 rightPWM=11
-//      if(buttnum==5){ // All forward
-//        left.writeMicroseconds(maxCCW);
-//        right.writeMicroseconds(maxCW);
-//      }
-//      if(buttnum==6){ // All backward
-//        left.writeMicroseconds(maxCW);
-//        right.writeMicroseconds(maxCCW);
-//      }
-//      if(buttnum==7){ // right forward, left backward
-//        left.writeMicroseconds(maxCW);
-//        right.writeMicroseconds(maxCW);
-//      }
-//      if(buttnum==8){ // right backward, left forward
-//        left.writeMicroseconds(maxCCW);
-//        right.writeMicroseconds(maxCCW);
-//      }
-//      if(buttnum==1){ // zero magnetometer one time
-//        calibrating = true;
-//        ble.println("CALIBRATING MAG");
-//      }
-//      if(buttnum==2){ // zero magnetometer one time
-//        calibrating = false;
-//        ble.println("DONE CALIBRATING");
-//      }
-//    } else {
-//      Serial.println(" released");
-//      // All stop
-//      left.writeMicroseconds(rest);
-//      right.writeMicroseconds(rest);
-//    }
-//  }
-//
-//  // GPS Location
-//  if (packetbuffer[1] == 'L') {
-//    float lat, lon, alt;
-//    lat = parsefloat(packetbuffer+2);
-//    lon = parsefloat(packetbuffer+6);
-//    alt = parsefloat(packetbuffer+10);
-//    Serial.print("GPS Location\t");
-//    Serial.print("Lat: "); Serial.print(lat, 4); // 4 digits of precision!
-//    Serial.print('\t');
-//    Serial.print("Lon: "); Serial.print(lon, 4); // 4 digits of precision!
-//    Serial.print('\t');
-//    Serial.print(alt, 4); Serial.println(" meters");
-//  }
-//
-//  // Accelerometer
-//  if (packetbuffer[1] == 'A') {
-//    float x, y, z;
-//    x = parsefloat(packetbuffer+2);
-//    y = parsefloat(packetbuffer+6);
-//    z = parsefloat(packetbuffer+10);
-//    Serial.print("Accel\t");
-//    Serial.print(x); Serial.print('\t');
-//    Serial.print(y); Serial.print('\t');
-//    Serial.print(z); Serial.println();
-//  }
-//
-//  // Magnetometer
-//  if (packetbuffer[1] == 'M') {
-//    float x, y, z;
-//    x = parsefloat(packetbuffer+2);
-//    y = parsefloat(packetbuffer+6);
-//    z = parsefloat(packetbuffer+10);
-////    mag = atan2(y,x)*180/3.1415926; //-magCal;   // Store into the global variable;
-//    Serial.print("Mag\t");
-//    //Serial.print(x); Serial.print('\t');
-//    //Serial.print(y); Serial.print('\t');
-//    //Serial.print(z); Serial.println();
-//    //Serial.println(mag);
-//  }
-//
-//  // Gyroscope
-//  if (packetbuffer[1] == 'G') {
-//    float x, y, z;
-//    x = parsefloat(packetbuffer+2);
-//    y = parsefloat(packetbuffer+6);
-//    z = parsefloat(packetbuffer+10);
-//    Serial.print("Gyro\t");
-//    Serial.print(x); Serial.print('\t');
-//    Serial.print(y); Serial.print('\t');
-//    Serial.print(z); Serial.println();
-//  }
-//
-//  // Quaternions
-//  if (packetbuffer[1] == 'Q') {
-//    float x, y, z, w;
-//    x = parsefloat(packetbuffer+2);
-//    y = parsefloat(packetbuffer+6);
-//    z = parsefloat(packetbuffer+10);
-//    w = parsefloat(packetbuffer+14);
-//    Serial.print("Quat\t");
-//    Serial.print(x); Serial.print('\t');
-//    Serial.print(y); Serial.print('\t');
-//    Serial.print(z); Serial.print('\t');
-//    Serial.print(w); Serial.println();
-//  }
+  if(!autonomous){  // poll the buttons repeatedly
+    /* Wait for new data to arrive */
+    uint8_t len = readPacket(&ble, BLE_READPACKET_TIMEOUT);
+    if (len == 0) return;
+  }
+  else if(autonomous && millis()-buttonMillis > 100){  // poll the buttons once per 100ms
+    buttonMillis = millis();
+    /* Wait for new data to arrive */
+    uint8_t len = readPacket(&ble, BLE_READPACKET_TIMEOUT);
+    if (len == 0) return;
+  }
+
+  if(autonomous){
+    steeringAngle = getSteering(heading, GPS.latitude, GPS.longitude, targetLat, targetLon);
+    distFromTarget = getDistance(GPS.latitude, GPS.longitude, targetLat, targetLon); // meters
+    if(distFromTarget > 10){
+      differentialDrive(steeringAngle, driveSpeed);
+    }
+    else{
+      stopDrive();
+    }
+  }
+
+  /* Got a packet! */
+  // printHex(packetbuffer, len);
+
+  // Color
+  if (packetbuffer[1] == 'C') {
+    uint8_t red = packetbuffer[2];
+    uint8_t green = packetbuffer[3];
+    uint8_t blue = packetbuffer[4];
+    Serial.print ("RGB #");
+    if (red < 0x10) Serial.print("0");
+    Serial.print(red, HEX);
+    if (green < 0x10) Serial.print("0");
+    Serial.print(green, HEX);
+    if (blue < 0x10) Serial.print("0");
+    Serial.println(blue, HEX);
+  }
+
+  // Buttons
+  if (packetbuffer[1] == 'B') {
+    uint8_t buttnum = packetbuffer[2] - '0';
+    boolean pressed = packetbuffer[3] - '0';
+    Serial.print ("Button "); Serial.print(buttnum);
+    if (pressed) {
+      Serial.println(" pressed");
+      // 5=forward, 6=back, 7=leftTurn, 8=rightTurn
+      // leftPWM=10 rightPWM=11
+      if(buttnum==5 && !autonomous){ // All forward
+        left.writeMicroseconds(maxCCW);
+        right.writeMicroseconds(maxCW);
+      }
+      if(buttnum==6 && !autonomous){ // All backward
+        left.writeMicroseconds(maxCW);
+        right.writeMicroseconds(maxCCW);
+      }
+      if(buttnum==7 && !autonomous){ // right forward, left backward
+        left.writeMicroseconds(maxCW);
+        right.writeMicroseconds(maxCW);
+      }
+      if(buttnum==8 && !autonomous){ // right backward, left forward
+        left.writeMicroseconds(maxCCW);
+        right.writeMicroseconds(maxCCW);
+      }
+      if(buttnum==1){ // enter magnetometer calibration mode
+        calibrating = true;
+        ble.println("CALIBRATING MAG");
+      }
+      if(buttnum==2){ // exit magnetometer calibration mode
+        calibrating = false;
+        ble.println("DONE CALIBRATING");
+      }
+      if(buttnum==3){ // enter autonomous mode
+        autonomous = true;
+        ble.println("AUTONOMOUS");
+      }
+      if(buttnum==4){ // exit autonomous mode
+        autonomous = false;
+        stopDrive();
+        ble.println("MANUAL");
+      }
+    } else {
+      if(buttnum==4){ // exit autonomous mode
+        autonomous = false;
+        stopDrive();
+        ble.println("MANUAL");
+      }
+      Serial.println(" released");
+      // All stop
+      left.writeMicroseconds(rest);
+      right.writeMicroseconds(rest);
+    }
+  }
+
+  // GPS Location
+  if (packetbuffer[1] == 'L') {
+    float lat, lon, alt;
+    lat = parsefloat(packetbuffer+2);
+    lon = parsefloat(packetbuffer+6);
+    alt = parsefloat(packetbuffer+10);
+    Serial.print("GPS Location\t");
+    Serial.print("Lat: "); Serial.print(lat, 4); // 4 digits of precision!
+    Serial.print('\t');
+    Serial.print("Lon: "); Serial.print(lon, 4); // 4 digits of precision!
+    Serial.print('\t');
+    Serial.print(alt, 4); Serial.println(" meters");
+  }
+
+  // Accelerometer
+  if (packetbuffer[1] == 'A') {
+    float x, y, z;
+    x = parsefloat(packetbuffer+2);
+    y = parsefloat(packetbuffer+6);
+    z = parsefloat(packetbuffer+10);
+    Serial.print("Accel\t");
+    Serial.print(x); Serial.print('\t');
+    Serial.print(y); Serial.print('\t');
+    Serial.print(z); Serial.println();
+  }
+
+  // Magnetometer
+  if (packetbuffer[1] == 'M') {
+    float x, y, z;
+    x = parsefloat(packetbuffer+2);
+    y = parsefloat(packetbuffer+6);
+    z = parsefloat(packetbuffer+10);
+//    mag = atan2(y,x)*180/3.1415926; //-magCal;   // Store into the global variable;
+    Serial.print("Mag\t");
+    //Serial.print(x); Serial.print('\t');
+    //Serial.print(y); Serial.print('\t');
+    //Serial.print(z); Serial.println();
+    //Serial.println(mag);
+  }
+
+  // Gyroscope
+  if (packetbuffer[1] == 'G') {
+    float x, y, z;
+    x = parsefloat(packetbuffer+2);
+    y = parsefloat(packetbuffer+6);
+    z = parsefloat(packetbuffer+10);
+    Serial.print("Gyro\t");
+    Serial.print(x); Serial.print('\t');
+    Serial.print(y); Serial.print('\t');
+    Serial.print(z); Serial.println();
+  }
+
+  // Quaternions
+  if (packetbuffer[1] == 'Q') {
+    float x, y, z, w;
+    x = parsefloat(packetbuffer+2);
+    y = parsefloat(packetbuffer+6);
+    z = parsefloat(packetbuffer+10);
+    w = parsefloat(packetbuffer+14);
+    Serial.print("Quat\t");
+    Serial.print(x); Serial.print('\t');
+    Serial.print(y); Serial.print('\t');
+    Serial.print(z); Serial.print('\t');
+    Serial.print(w); Serial.println();
+  }
 }
 
 
@@ -430,11 +475,15 @@ double mapf(double x, double in_min, double in_max, double out_min, double out_m
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-float deg2rad(deg){
+float deg2rad(float deg){
   return deg*PI/180;
 }
 
-float distance(double lat1, double lon1, double lat2, double lon2){  // generally used geo measurement function
+float rad2deg(float rad){
+  return rad*180/PI;
+}
+
+float getDistance(double lat1, double lon1, double lat2, double lon2){  // generally used geo measurement function
     float R = 6378.137; // Radius of earth in KM
     float dLat = lat2 * PI / 180 - lat1 * PI / 180;
     float dLon = lon2 * PI / 180 - lon1 * PI / 180;
@@ -444,11 +493,11 @@ float distance(double lat1, double lon1, double lat2, double lon2){  // generall
     return d * 1000; // meters
 }
 
-float getSteering(currHead, currLat, currLon, targLat, targLon){
+float getSteering(float currHead, float currLat, float currLon, float targLat, float targLon){
     // currHead must be from -360 to 360;
-    x = cos(deg2rad(targLat)) * sin(deg2rad(currLon-targLon));
-    y = cos(deg2rad(currLat)) * sin(deg2rad(targLat)) - sin(deg2rad(currLat)) * cos(deg2rad(targLat)) * cos(deg2rad(currLon-targLon));
-    steering = -rad2deg(atan2(x,y)) - currHead;
+    float x = cos(deg2rad(targLat)) * sin(deg2rad(currLon-targLon));
+    float y = cos(deg2rad(currLat)) * sin(deg2rad(targLat)) - sin(deg2rad(currLat)) * cos(deg2rad(targLat)) * cos(deg2rad(currLon-targLon));
+    float steering = -rad2deg(atan2(x,y)) - currHead;
     if(steering >= 180){
         steering = steering - 360;
     }
@@ -458,21 +507,29 @@ float getSteering(currHead, currLat, currLon, targLat, targLon){
     return steering;
 }
 
-float L_R_velocity = differentialDrive(float steeringAngle, float driveSpeed){
+
+void differentialDrive(float steeringAngle, float driveSpeed){
     // steeringAngle must be from -180 to 180.
     // maximum forward is 2000.
     // stop is 1500.
     // maximum reverse is 1000.
-    if steeringAngle < 0 
-        %R = driveSpeed + mapfun(abs(steeringAngle), 0,180, 0,100);
-        R = driveSpeed + interp1([0,180],[0,100],abs(steeringAngle));
-    else
-        R = driveSpeed;
-    end
-    if steeringAngle > 0
-        L = driveSpeed + interp1([0,180],[0,100],abs(steeringAngle));
-    else
-        L = driveSpeed;
-    end
-    L_R_velocity = [L, R];
+    float leftDriveSpeed = rest+driveSpeed;  // 1700
+    float rightDriveSpeed = rest-driveSpeed; // 1300
+    if (steeringAngle < 0){
+      float L = leftDriveSpeed - mapf(abs(steeringAngle), 0,180, 0,200); // slow left down
+      float R = rightDriveSpeed;
+      left.writeMicroseconds(L);
+      right.writeMicroseconds(R);
+    }
+    if (steeringAngle > 0){
+      float L = leftDriveSpeed;
+      float R = rightDriveSpeed + mapf(abs(steeringAngle), 0,180, 0,200); // slow right down
+      left.writeMicroseconds(L);
+      right.writeMicroseconds(R);
+    }
+}
+
+void stopDrive(){
+  left.writeMicroseconds(rest);
+  right.writeMicroseconds(rest);
 }

@@ -4,7 +4,7 @@
 // ----------------------------------------------------------------------------------------------
 #define BUFSIZE                        128   // Size of the read buffer for incoming data
 #define VERBOSE_MODE                   true  // If set to 'true' enables debug output
-#define BLE_READPACKET_TIMEOUT         500   // Timeout in ms waiting to read a response
+#define BLE_READPACKET_TIMEOUT         10//500   // Timeout in ms waiting to read a response
 
 
 // SOFTWARE UART SETTINGS

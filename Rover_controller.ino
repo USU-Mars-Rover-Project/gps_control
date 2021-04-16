@@ -37,6 +37,8 @@
 
 double targetLat = 41.741915714505566;
 double targetLon = -111.80837907922745;
+double GPS_latitude = 0;
+double GPS_longitude = 0;
 
 float steeringAngle = 0;
 float distFromTarget = 0;
@@ -226,7 +228,12 @@ void setup(void)
   Serial.println(F("******************************"));
   
 }
-
+ float round_to_dp( float in_value, int decimal_place )
+{ //https://forum.arduino.cc/t/float-rounding-and-truncate-functions/320002/9
+    float multiplier = powf( 10.0f, decimal_place );
+    in_value = roundf( in_value * multiplier ) / multiplier;
+    return in_value;
+}
 /**************************************************************************/
 /*!
     @brief  Constantly poll for new command or response data
@@ -243,11 +250,49 @@ void loop(void)
     // a tricky thing here is if we print the NMEA sentence, or data
     // we end up not listening and catching other sentences!
     // so be very wary if using OUTPUT_ALLDATA and trying to print out data
-    Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
+    //Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
     if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
       return; // we can fail to parse a sentence in which case we should just wait for another
-    if(GPS.lat == 'S' && GPS.latitude>=0) GPS.latitude = -GPS.latitude;
-    if(GPS.lon == 'W' && GPS.longitude>=0) GPS.longitude = -GPS.longitude;
+
+    Serial.print("___>>##>> GPS.latitude: ");
+    Serial.println(GPS.latitude, 12);
+    Serial.print("___>>##>> GPS.longitude: ");
+    Serial.println(GPS.longitude, 12);
+    
+    int index =  String(GPS.latitude).indexOf('.');
+    String start = String(GPS.latitude,12);
+    start.remove(index-2);//remove everything after index -2 (the 00.000)
+    String ending = String(GPS.latitude,12);
+    ending.replace(start,"");//remove the front for the sting 
+    Serial.print("GPS_latitude: ");
+    Serial.println(GPS_latitude,12);
+
+    int index_LON =  String(GPS.longitude).indexOf('.');
+    Serial.print("index_LON: ");
+    Serial.println(index_LON);
+    String start_LON = String(GPS.longitude, 12);
+    start_LON.remove(index_LON-2);//remove everything after index -2 (the 00.000)
+    Serial.print("start_LON: ");
+    Serial.println(start_LON);
+    String ending_LON = String(GPS.longitude, 12);
+    ending_LON.replace(start_LON,"");//remove the front for the sting 
+    Serial.print("ending_LON: ");
+    Serial.println(ending_LON);
+    
+    GPS_latitude = start.toFloat()+ ending.toFloat()/60.0 ;
+    GPS_longitude = start_LON.toFloat()+ ending_LON.toFloat()/60.0 ;
+
+    if(GPS.lat == 'S' && GPS_latitude>=0) GPS_latitude = -GPS_latitude;
+    if(GPS.lon == 'W' && GPS_longitude>=0) GPS_longitude = -GPS_longitude;
+
+    //Serial.print("GPS_latitude: ");
+    //Serial.println(GPS_latitude,12);
+    Serial.print("GPS_longitude: ");
+    Serial.println(GPS_longitude,12);
+    
+    Serial.print("GPS.satellites: ");
+    Serial.println(GPS.satellites);
+    Serial.println();
   }
 
   sensors_event_t event;
@@ -267,6 +312,18 @@ void loop(void)
     heading = 360 + heading;
   }
 
+  steeringAngle = getSteering(heading, GPS_latitude, GPS_longitude, targetLat, targetLon);
+  distFromTarget = getDistance(GPS_latitude, GPS_longitude, targetLat, targetLon); // meters
+  
+  if(autonomous && GPS.satellites >= 3){
+    if(distFromTarget > 10){
+      differentialDrive(steeringAngle, driveSpeed);
+    }
+    else{
+      stopDrive();
+    }
+  }
+
   
   if(!calibrating){
     if(millis()-blePrintMillis > 1000){
@@ -279,9 +336,9 @@ void loop(void)
       ble.print(" ");
       ble.print(GPS.satellites);
       ble.print(" ");
-      ble.print(GPS.latitude/100.0,12);
+      ble.print(GPS_latitude,12);
       ble.print(" ");
-      ble.println(GPS.longitude/100.0,12);
+      ble.println(GPS_longitude,12);
     }
   }
   else{
@@ -320,16 +377,6 @@ void loop(void)
     if (len == 0) return;
   }
 
-  if(autonomous){
-    steeringAngle = getSteering(heading, GPS.latitude, GPS.longitude, targetLat, targetLon);
-    distFromTarget = getDistance(GPS.latitude, GPS.longitude, targetLat, targetLon); // meters
-    if(distFromTarget > 10){
-      differentialDrive(steeringAngle, driveSpeed);
-    }
-    else{
-      stopDrive();
-    }
-  }
 
   /* Got a packet! */
   // printHex(packetbuffer, len);
